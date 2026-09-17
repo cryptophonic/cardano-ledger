@@ -31,6 +31,7 @@ index-state:
   , cardano-haskell-packages 2026-07-27T20:44:57Z
 
 packages:
+  ../cardano-fork-mode
   -- == Byron era ==
   -- byron-spec-chain:
   -- byron-spec-ledger:
