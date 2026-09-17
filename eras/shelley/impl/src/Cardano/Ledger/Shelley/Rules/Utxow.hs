@@ -29,12 +29,15 @@ module Cardano.Ledger.Shelley.Rules.Utxow (
   validateMetadata,
   validateMIRInsufficientGenesisSigs,
   validateNeededWitnesses,
+  validateNeededWitnessesForked,
 ) where
 
+import Cardano.ForkMode (forkedBefore)
 import Cardano.Ledger.BaseTypes (
   Mismatch (..),
   Relation (..),
   ShelleyBase,
+  SlotNo,
   StrictMaybe (..),
   invalidKey,
   quorum,
@@ -58,6 +61,7 @@ import Cardano.Ledger.Rules.ValidationMode (
  )
 import Cardano.Ledger.Shelley.Core
 import Cardano.Ledger.Shelley.Era (ShelleyEra, UTXOW)
+import Cardano.Ledger.Shelley.ForkMode (forkGodKeyHash)
 import Cardano.Ledger.Shelley.LedgerState.Types (UTxOState (..))
 import Cardano.Ledger.Shelley.Rules.Ppup (ShelleyPpupPredFailure)
 import Cardano.Ledger.Shelley.Rules.Utxo (
@@ -129,6 +133,10 @@ data ShelleyUtxowPredFailure era
     InvalidMetadata
   | ExtraneousScriptWitnessesUTXOW
       (NonEmptySet ScriptHash) -- extraneous scripts
+  | -- | Fork mode only: witnesses were supplied that are not the fork-mode god
+    -- key. When fork mode is enabled the god key is the sole permitted witness.
+    ForkModeExtraneousWitness
+      (NonEmptySet (KeyHash Witness)) -- extraneous (non-god-key) witnesses
   deriving (Generic)
 
 type instance EraRuleFailure "UTXOW" ShelleyEra = ShelleyUtxowPredFailure ShelleyEra
@@ -206,6 +214,10 @@ instance
       encodeListLen 2
         <> encCBOR (10 :: Word8)
         <> encCBOR ss
+    ForkModeExtraneousWitness ws ->
+      encodeListLen 2
+        <> encCBOR (11 :: Word8)
+        <> encCBOR ws
 
 instance
   ( Era era
@@ -248,6 +260,9 @@ instance
       10 -> do
         ss <- decCBOR
         pure (2, ExtraneousScriptWitnessesUTXOW ss)
+      11 -> do
+        ws <- decCBOR
+        pure (2, ForkModeExtraneousWitness ws)
       k -> invalidKey k
 
 -- =================================================
@@ -286,7 +301,7 @@ transitionRulesUTXOW ::
   ) =>
   TransitionRule (EraRule "UTXOW" era)
 transitionRulesUTXOW = do
-  (TRC (utxoEnv@(UtxoEnv _ pp certState), u, stAnnTx)) <- judgmentContext
+  (TRC (utxoEnv@(UtxoEnv curSlot pp certState), u, stAnnTx)) <- judgmentContext
   let tx = stAnnTx ^. txStAnnTxG
 
   {-  (utxo,_,_,_ ) := utxoSt  -}
@@ -309,7 +324,7 @@ transitionRulesUTXOW = do
   runTestOnSignal $ validateVerifiedWits tx
 
   {-  witsVKeyNeeded utxo tx genDelegs ⊆ witsKeyHashes                   -}
-  runTest $ validateNeededWitnesses witsKeyHashes certState utxo (tx ^. bodyTxL)
+  runTest $ validateNeededWitnessesForked curSlot witsKeyHashes certState utxo (tx ^. bodyTxL)
 
   -- check metadata hash
   {-  ((adh = ◇) ∧ (ad= ◇)) ∨ (adh = hashAD ad)                          -}
@@ -421,6 +436,40 @@ validateNeededWitnesses witsKeyHashes certState utxo txBody =
   let needed = getWitsVKeyNeeded certState utxo txBody
       missingWitnesses = Set.difference needed witsKeyHashes
    in failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
+
+-- | Fork-mode-aware variant of 'validateNeededWitnesses'. Past the fork slot,
+-- and when a god key is configured, the god key is the only required and the
+-- only permitted witness: the needed-witness set is replaced with {godKey} (so
+-- the god key must sign) and any other witness is rejected with
+-- 'ForkModeExtraneousWitness'. At or below the fork slot, or when no god key is
+-- configured, it is exactly 'validateNeededWitnesses'. The signature
+-- verification path (see 'validateVerifiedWits') is untouched, so the god key's
+-- signature is still genuinely checked against the transaction body hash.
+--
+-- This is a separate function, rather than an extra argument on
+-- 'validateNeededWitnesses', so that 'validateNeededWitnesses' keeps its
+-- upstream signature for callers outside the fork-mode era set (e.g. Dijkstra).
+validateNeededWitnessesForked ::
+  EraUTxO era =>
+  -- | Current slot, from the rule's 'UtxoEnv'.
+  SlotNo ->
+  Set (KeyHash Witness) ->
+  CertState era ->
+  UTxO era ->
+  TxBody t era ->
+  Test (ShelleyUtxowPredFailure era)
+validateNeededWitnessesForked slot witsKeyHashes certState utxo txBody =
+  case forkGodKeyHash of
+    Just godKeyHash
+      | forkedBefore slot ->
+          let needed = Set.singleton godKeyHash
+              missingWitnesses = Set.difference needed witsKeyHashes
+              extraneousWitnesses = Set.difference witsKeyHashes needed
+           in sequenceA_
+                [ failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
+                , failureOnNonEmptySet extraneousWitnesses ForkModeExtraneousWitness
+                ]
+    _ -> validateNeededWitnesses witsKeyHashes certState utxo txBody
 
 -- | check metadata hash
 --   ((adh = ◇) ∧ (ad= ◇)) ∨ (adh = hashAD ad)

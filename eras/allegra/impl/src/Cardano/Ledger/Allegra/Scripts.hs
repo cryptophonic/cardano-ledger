@@ -99,6 +99,7 @@ import Cardano.Ledger.MemoBytes (
   unpackMemoBytesM,
  )
 import Cardano.Ledger.MemoBytes.Internal (MemoBytes (..), mkMemoBytesShort)
+import Cardano.Ledger.Shelley.ForkMode (forkGodKeyHash)
 import Cardano.Ledger.Shelley.Scripts (
   ShelleyEraScript (..),
   nativeMultiSigTag,
@@ -505,7 +506,16 @@ evalTimelock vhks (ValidityInterval txStart txExp) = go
     go = \case
       RequireTimeStart lockStart -> lockStart `lteNegInfty` txStart
       RequireTimeExpire lockExp -> txExp `ltePosInfty` lockExp
-      RequireSignature hash -> hash `Set.member` vhks
+      -- Fork mode: once the god key has signed the transaction it satisfies
+      -- every signature requirement, so a single god-key witness can spend
+      -- timelock-locked outputs. The time bounds above are left untouched.
+      -- Gating on the god key actually being among the provided witnesses keeps
+      -- this a no-op for stock transactions (which never carry it), hence
+      -- unchanged below the fork slot; past the fork slot the witnessing rule
+      -- (see 'validateNeededWitnessesForked') makes the god key the sole witness.
+      RequireSignature hash
+        | Just gk <- forkGodKeyHash, gk `Set.member` vhks -> True
+        | otherwise -> hash `Set.member` vhks
       RequireAllOf xs -> all go xs
       RequireAnyOf xs -> any go xs
       RequireMOf m xs -> isValidMOf m xs

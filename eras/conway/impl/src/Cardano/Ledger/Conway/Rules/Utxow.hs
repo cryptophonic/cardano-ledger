@@ -109,6 +109,10 @@ data ConwayUtxowPredFailure era
     ScriptIntegrityHashMismatch
       (Mismatch RelEQ (StrictMaybe ScriptIntegrityHash))
       (StrictMaybe ByteString)
+  | -- | Fork mode only: witnesses were supplied that are not the fork-mode god
+    -- key. When fork mode is enabled the god key is the sole permitted witness.
+    ForkModeExtraneousWitness
+      (NonEmptySet (KeyHash Witness))
   deriving (Generic)
 
 type instance EraRuleFailure "UTXOW" ConwayEra = ConwayUtxowPredFailure ConwayEra
@@ -243,6 +247,7 @@ instance
       MalformedScriptWitnesses x -> Sum MalformedScriptWitnesses 16 !> To x
       MalformedReferenceScripts x -> Sum MalformedReferenceScripts 17 !> To x
       ScriptIntegrityHashMismatch x y -> Sum ScriptIntegrityHashMismatch 18 !> To x !> To y
+      ForkModeExtraneousWitness xs -> Sum ForkModeExtraneousWitness 19 !> To xs
 
 instance
   ( ConwayEraScript era
@@ -270,6 +275,7 @@ instance
     16 -> SumD MalformedScriptWitnesses <! From
     17 -> SumD MalformedReferenceScripts <! From
     18 -> SumD ScriptIntegrityHashMismatch <! From <! From
+    19 -> SumD ForkModeExtraneousWitness <! From
     n -> Invalid n
 
 -- =====================================================
@@ -314,6 +320,7 @@ shelleyToConwayUtxowPredFailure = \case
   Shelley.ConflictingMetadataHash mm -> ConflictingMetadataHash mm
   Shelley.InvalidMetadata -> InvalidMetadata
   Shelley.ExtraneousScriptWitnessesUTXOW xs -> ExtraneousScriptWitnessesUTXOW xs
+  Shelley.ForkModeExtraneousWitness xs -> ForkModeExtraneousWitness xs
 
 instance InjectRuleFailure "UTXOW" ConwayUtxosPredFailure ConwayEra where
   injectFailure = UtxoFailure . injectFailure

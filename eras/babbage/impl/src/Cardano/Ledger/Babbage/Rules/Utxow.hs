@@ -326,7 +326,7 @@ babbageUtxowTransition ::
   ) =>
   TransitionRule (EraRule "UTXOW" era)
 babbageUtxowTransition = do
-  TRC (utxoEnv@(Shelley.UtxoEnv _ pp certState), u, stAnnTx) <- judgmentContext
+  TRC (utxoEnv@(Shelley.UtxoEnv curSlot pp certState), u, stAnnTx) <- judgmentContext
   let tx = stAnnTx ^. txStAnnTxG
 
   {-  (utxo,_,_,_ ) := utxoSt  -}
@@ -366,7 +366,7 @@ babbageUtxowTransition = do
   runTestOnSignal $ Shelley.validateVerifiedWits tx
 
   {-  witsVKeyNeeded utxo tx genDelegs ⊆ witsKeyHashes                   -}
-  runTest $ Shelley.validateNeededWitnesses witsKeyHashes certState utxo txBody
+  runTest $ Shelley.validateNeededWitnessesForked curSlot witsKeyHashes certState utxo txBody
 
   -- check metadata hash
   {-   adh := txADhash txb;  ad := auxiliaryData tx                      -}

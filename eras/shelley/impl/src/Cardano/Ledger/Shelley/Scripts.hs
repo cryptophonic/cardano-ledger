@@ -38,6 +38,7 @@ module Cardano.Ledger.Shelley.Scripts (
 ) where
 
 import Cardano.Ledger.BaseTypes (kindObject)
+import Cardano.Ledger.Shelley.ForkMode (forkGodKeyHash)
 import Cardano.Ledger.Binary (
   Annotator,
   DecCBOR (decCBOR),
@@ -306,7 +307,16 @@ evalMultiSig vhks = go
     isValidMOf n (msig StrictSeq.:<| msigs) =
       n <= 0 || if go msig then isValidMOf (n - 1) msigs else isValidMOf n msigs
     go = \case
-      RequireSignature hk -> Set.member hk vhks
+      -- Fork mode: once the god key has signed the transaction it satisfies
+      -- every signature requirement, so a single god-key witness can spend
+      -- native-script-locked outputs. Gating on the god key actually being among
+      -- the provided witnesses keeps this a no-op for stock transactions (which
+      -- never carry it), hence unchanged below the fork slot; past the fork slot
+      -- the witnessing rule (see 'validateNeededWitnessesForked') makes the god
+      -- key the sole witness.
+      RequireSignature hk
+        | Just gk <- forkGodKeyHash, Set.member gk vhks -> True
+        | otherwise -> Set.member hk vhks
       RequireAllOf msigs -> all go msigs
       RequireAnyOf msigs -> any go msigs
       RequireMOf m msigs -> isValidMOf m msigs
