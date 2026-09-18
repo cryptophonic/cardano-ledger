@@ -133,10 +133,6 @@ data ShelleyUtxowPredFailure era
     InvalidMetadata
   | ExtraneousScriptWitnessesUTXOW
       (NonEmptySet ScriptHash) -- extraneous scripts
-  | -- | Fork mode only: witnesses were supplied that are not the fork-mode god
-    -- key. When fork mode is enabled the god key is the sole permitted witness.
-    ForkModeExtraneousWitness
-      (NonEmptySet (KeyHash Witness)) -- extraneous (non-god-key) witnesses
   deriving (Generic)
 
 type instance EraRuleFailure "UTXOW" ShelleyEra = ShelleyUtxowPredFailure ShelleyEra
@@ -214,10 +210,6 @@ instance
       encodeListLen 2
         <> encCBOR (10 :: Word8)
         <> encCBOR ss
-    ForkModeExtraneousWitness ws ->
-      encodeListLen 2
-        <> encCBOR (11 :: Word8)
-        <> encCBOR ws
 
 instance
   ( Era era
@@ -260,9 +252,6 @@ instance
       10 -> do
         ss <- decCBOR
         pure (2, ExtraneousScriptWitnessesUTXOW ss)
-      11 -> do
-        ws <- decCBOR
-        pure (2, ForkModeExtraneousWitness ws)
       k -> invalidKey k
 
 -- =================================================
@@ -438,13 +427,14 @@ validateNeededWitnesses witsKeyHashes certState utxo txBody =
    in failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
 
 -- | Fork-mode-aware variant of 'validateNeededWitnesses'. Past the fork slot,
--- and when a god key is configured, the god key is the only required and the
--- only permitted witness: the needed-witness set is replaced with {godKey} (so
--- the god key must sign) and any other witness is rejected with
--- 'ForkModeExtraneousWitness'. At or below the fork slot, or when no god key is
--- configured, it is exactly 'validateNeededWitnesses'. The signature
--- verification path (see 'validateVerifiedWits') is untouched, so the god key's
--- signature is still genuinely checked against the transaction body hash.
+-- and when a god key is configured, the needed-witness set is replaced with
+-- {godKey}, so a transaction the god key has not witnessed fails with the
+-- stock 'MissingVKeyWitnessesUTXOW' naming the god key hash. No new predicate
+-- failure is introduced, so rejections stay decodable by unpatched clients.
+-- At or below the fork slot, or when no god key is configured, it is exactly
+-- 'validateNeededWitnesses'. The signature verification path (see
+-- 'validateVerifiedWits') is untouched, so a bad god-key signature still fails
+-- with 'InvalidWitnessesUTXOW'.
 --
 -- This is a separate function, rather than an extra argument on
 -- 'validateNeededWitnesses', so that 'validateNeededWitnesses' keeps its
@@ -462,13 +452,8 @@ validateNeededWitnessesForked slot witsKeyHashes certState utxo txBody =
   case forkGodKeyHash of
     Just godKeyHash
       | forkedBefore slot ->
-          let needed = Set.singleton godKeyHash
-              missingWitnesses = Set.difference needed witsKeyHashes
-              extraneousWitnesses = Set.difference witsKeyHashes needed
-           in sequenceA_
-                [ failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
-                , failureOnNonEmptySet extraneousWitnesses ForkModeExtraneousWitness
-                ]
+          let missingWitnesses = Set.difference (Set.singleton godKeyHash) witsKeyHashes
+           in failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
     _ -> validateNeededWitnesses witsKeyHashes certState utxo txBody
 
 -- | check metadata hash
