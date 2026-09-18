@@ -326,6 +326,7 @@ test-suite fork-mode
     base,
     bytestring,
     cardano-crypto-class,
+    cardano-data,
     cardano-ledger-core,
     cardano-ledger-shelley,
     containers,

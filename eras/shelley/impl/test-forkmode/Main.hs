@@ -24,7 +24,7 @@ import Cardano.Ledger.Core (TopTx, TxBody, mkBasicTxBody)
 import Cardano.Ledger.Hashes (KeyHash (KeyHash), KeyRole (Witness))
 import Cardano.Ledger.Shelley (ShelleyEra)
 import Cardano.Ledger.Shelley.Rules (
-  ShelleyUtxowPredFailure (ForkModeExtraneousWitness),
+  ShelleyUtxowPredFailure (MissingVKeyWitnessesUTXOW),
   validateNeededWitnessesForked,
  )
 import Cardano.Ledger.State (CertState, UTxO (UTxO))
@@ -35,6 +35,7 @@ import Data.Foldable (toList)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
+import qualified Data.Set.NonEmpty as NonEmptySet
 import Data.Word (Word8)
 import System.Environment (getArgs, getEnvironment, getExecutablePath)
 import System.Exit (ExitCode (ExitSuccess), exitFailure, exitSuccess)
@@ -77,11 +78,11 @@ runForked slot wits certState utxo txBody =
     Success () -> Right ()
     Failure errs -> Left (toList errs)
 
-hasForkModeExtraneous :: [ShelleyUtxowPredFailure ShelleyEra] -> Bool
-hasForkModeExtraneous = any isFME
-  where
-    isFME (ForkModeExtraneousWitness _) = True
-    isFME _ = False
+-- | The rejection is the stock 'MissingVKeyWitnessesUTXOW' naming exactly the
+-- god key, so unpatched clients can decode it.
+isMissingGodKey :: [ShelleyUtxowPredFailure ShelleyEra] -> Bool
+isMissingGodKey [MissingVKeyWitnessesUTXOW ws] = ws == NonEmptySet.singleton godKey
+isMissingGodKey _ = False
 
 check :: String -> Bool -> IO ()
 check label cond = unless cond (die ("assertion failed: " ++ label))
@@ -92,8 +93,9 @@ die msg = hPutStrLn stderr msg >> exitFailure
 -- | Assertions run with a god key configured (child process).
 withGodKey :: IO ()
 withGodKey = do
-  -- Past the fork slot (100 < 150): the god key is the sole permitted witness,
-  -- so a non-god witness is rejected with 'ForkModeExtraneousWitness'. The god
+  -- Past the fork slot (100 < 150): the needed-witness set is {godKey}, so a
+  -- tx witnessed only by another key is rejected with the stock
+  -- 'MissingVKeyWitnessesUTXOW' naming the god key. The god
   -- branch does not touch the ledger-state arguments, so they are 'undefined'.
   let pastFork nonGod =
         runForked
@@ -102,9 +104,9 @@ withGodKey = do
           (undefined :: CertState ShelleyEra)
           (undefined :: UTxO ShelleyEra)
           (undefined :: TxBody TopTx ShelleyEra)
-  check "past fork: non-god witness rejected with ForkModeExtraneousWitness" $
+  check "past fork: non-god witness rejected with MissingVKeyWitnessesUTXOW {godKey}" $
     case pastFork otherKey of
-      Left errs -> hasForkModeExtraneous errs
+      Left errs -> isMissingGodKey errs
       Right () -> False
   -- Past the fork slot, the god key alone satisfies the witnessing rule.
   check "past fork: god key alone is accepted" $
@@ -117,7 +119,7 @@ withGodKey = do
       == Right ()
   -- At or below the fork slot (150 -> 50) the stock rule runs: an empty
   -- transaction needs no witnesses, so any provided witness is fine and no
-  -- ForkModeExtraneousWitness is raised. This is byte-for-byte stock behaviour.
+  -- god-key requirement is imposed. This is byte-for-byte stock behaviour.
   check "below fork: stock behaviour (empty tx accepts any witness)" $
     runForked
       (SlotNo 50)
