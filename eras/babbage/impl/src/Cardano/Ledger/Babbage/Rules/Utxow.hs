@@ -332,10 +332,8 @@ babbageUtxowTransition = do
   {-  (utxo,_,_,_ ) := utxoSt  -}
   {-  txb := txbody tx  -}
   {-  txw := txwits tx  -}
-  {-  witsKeyHashes := { hashKey vk | vk ∈ dom(txwitsVKey txw) }  -}
   let utxo = utxosUtxo u
       txBody = tx ^. bodyTxL
-      witsKeyHashes = keyHashWitnessesTxWits (tx ^. witsTxL)
       inputs = (txBody ^. referenceInputsTxBodyL) `Set.union` (txBody ^. inputsTxBodyL)
 
   -- check scripts
@@ -366,7 +364,7 @@ babbageUtxowTransition = do
   runTestOnSignal $ Shelley.validateVerifiedWits tx
 
   {-  witsVKeyNeeded utxo tx genDelegs ⊆ witsKeyHashes                   -}
-  runTest $ Shelley.validateNeededWitnessesForked curSlot witsKeyHashes certState utxo txBody
+  runTest $ Shelley.validateNeededWitnessesForked curSlot (tx ^. witsTxL) certState utxo txBody
 
   -- check metadata hash
   {-   adh := txADhash txb;  ad := auxiliaryData tx                      -}

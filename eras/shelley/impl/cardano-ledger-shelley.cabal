@@ -328,9 +328,11 @@ test-suite fork-mode
     cardano-crypto-class,
     cardano-data,
     cardano-ledger-core,
+    cardano-ledger-core:testlib,
     cardano-ledger-shelley,
     containers,
     data-default,
+    microlens,
     process,
     validation-selective,
 

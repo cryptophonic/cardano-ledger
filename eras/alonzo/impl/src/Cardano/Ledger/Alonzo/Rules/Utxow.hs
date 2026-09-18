@@ -348,7 +348,7 @@ alonzoStyleWitness = do
   runTestOnSignal $ Shelley.validateVerifiedWits tx
 
   {-  witsVKeyNeeded utxo tx genDelegs ⊆ witsKeyHashes                   -}
-  runTest $ Shelley.validateNeededWitnessesForked curSlot witsKeyHashes certState utxo txBody
+  runTest $ Shelley.validateNeededWitnessesForked curSlot (tx ^. witsTxL) certState utxo txBody
 
   -- check genesis keys signatures for instantaneous rewards certificates
   {-  genSig := { hashKey gkey | gkey ∈ dom(genDelegs)} ∩ witsKeyHashes  -}

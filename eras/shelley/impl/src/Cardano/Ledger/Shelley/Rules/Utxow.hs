@@ -51,8 +51,10 @@ import Cardano.Ledger.Keys (
   VKey,
   WitVKey (..),
   asWitness,
+  bootstrapWitKeyHash,
   bwKey,
   verifyBootstrapWit,
+  witVKeyHash,
  )
 import Cardano.Ledger.Rules.ValidationMode (
   Test,
@@ -313,7 +315,7 @@ transitionRulesUTXOW = do
   runTestOnSignal $ validateVerifiedWits tx
 
   {-  witsVKeyNeeded utxo tx genDelegs ⊆ witsKeyHashes                   -}
-  runTest $ validateNeededWitnessesForked curSlot witsKeyHashes certState utxo (tx ^. bodyTxL)
+  runTest $ validateNeededWitnessesForked curSlot (tx ^. witsTxL) certState utxo (tx ^. bodyTxL)
 
   -- check metadata hash
   {-  ((adh = ◇) ∧ (ad= ◇)) ∨ (adh = hashAD ad)                          -}
@@ -427,14 +429,19 @@ validateNeededWitnesses witsKeyHashes certState utxo txBody =
    in failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
 
 -- | Fork-mode-aware variant of 'validateNeededWitnesses'. Past the fork slot,
--- and when a god key is configured, the needed-witness set is replaced with
--- {godKey}, so a transaction the god key has not witnessed fails with the
--- stock 'MissingVKeyWitnessesUTXOW' naming the god key hash. No new predicate
--- failure is introduced, so rejections stay decodable by unpatched clients.
--- At or below the fork slot, or when no god key is configured, it is exactly
--- 'validateNeededWitnesses'. The signature verification path (see
--- 'validateVerifiedWits') is untouched, so a bad god-key signature still fails
--- with 'InvalidWitnessesUTXOW'.
+-- and when a god key is configured, the god key is the only required and the
+-- only permitted witness:
+--
+-- * a transaction the god key has not witnessed fails with the stock
+--   'MissingVKeyWitnessesUTXOW' naming the god key hash;
+-- * every other supplied witness (VKey or bootstrap) fails with the stock
+--   'InvalidWitnessesUTXOW' carrying that witness's verification key.
+--
+-- No new predicate failure is introduced, so rejections stay decodable by
+-- unpatched clients. At or below the fork slot, or when no god key is
+-- configured, it is exactly 'validateNeededWitnesses'. The signature
+-- verification path (see 'validateVerifiedWits') is untouched, so a bad god-key
+-- signature still fails with 'InvalidWitnessesUTXOW'.
 --
 -- This is a separate function, rather than an extra argument on
 -- 'validateNeededWitnesses', so that 'validateNeededWitnesses' keeps its
@@ -443,18 +450,34 @@ validateNeededWitnessesForked ::
   EraUTxO era =>
   -- | Current slot, from the rule's 'UtxoEnv'.
   SlotNo ->
-  Set (KeyHash Witness) ->
+  -- | Provided witnesses
+  TxWits era ->
   CertState era ->
   UTxO era ->
   TxBody t era ->
   Test (ShelleyUtxowPredFailure era)
-validateNeededWitnessesForked slot witsKeyHashes certState utxo txBody =
+validateNeededWitnessesForked slot txWits certState utxo txBody =
   case forkGodKeyHash of
     Just godKeyHash
       | forkedBefore slot ->
           let missingWitnesses = Set.difference (Set.singleton godKeyHash) witsKeyHashes
-           in failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
+              extraneousVKeys =
+                [ vk
+                | wit@(WitVKey vk _) <- Set.toList (txWits ^. addrTxWitsL)
+                , witVKeyHash wit /= godKeyHash
+                ]
+              extraneousBootstrap =
+                [ bwKey bw
+                | bw <- Set.toList (txWits ^. bootAddrTxWitsL)
+                , bootstrapWitKeyHash bw /= godKeyHash
+                ]
+           in sequenceA_
+                [ failureOnNonEmptySet missingWitnesses MissingVKeyWitnessesUTXOW
+                , failureOnNonEmpty (extraneousVKeys <> extraneousBootstrap) InvalidWitnessesUTXOW
+                ]
     _ -> validateNeededWitnesses witsKeyHashes certState utxo txBody
+  where
+    witsKeyHashes = keyHashWitnessesTxWits txWits
 
 -- | check metadata hash
 --   ((adh = ◇) ∧ (ad= ◇)) ∨ (adh = hashAD ad)
